@@ -22,8 +22,9 @@ from sklearn.metrics import accuracy_score, classification_report, confusion_mat
 from nba_api.stats.endpoints import playergamelogs
 import streamlit as st
 from sklearn.ensemble import RandomForestClassifier
-
-
+from xgboost import XGBClassifier
+from nba_api.stats.endpoints import leaguegamefinder
+import ast
 # %% some flags
 
 currentSeasonID = 22024
@@ -667,7 +668,7 @@ def logisticReg(datain):
 
 # RandomForrest 62% accuracy
 @st.cache_data
-def randomForest(datain):
+def randomForesttest(datain):
     # Assuming combinedshuffled_df is your DataFrame
     X = combinedshuffled_df.drop(columns=['WL1'])
     y = combinedshuffled_df['WL1']
@@ -692,7 +693,104 @@ def randomForest(datain):
     predicted_class = model.predict(datain.drop(columns=['WL1']))
     return [predicted_class, predicted_proba]
 
+@st.cache_data
+def XGBoosttest(datain):
+    X = combinedshuffled_df.drop(columns=['WL1'])
+    y = combinedshuffled_df['WL1']
+    
+    # Create the XGBoost model with hyperparameters
+    model = XGBClassifier(
+        n_estimators=200,  # Number of trees
+        learning_rate=0.05,  # Step size shrinkage
+        max_depth=6,  # Maximum depth of each tree
+        subsample=0.8,  # Fraction of samples used per tree
+        colsample_bytree=0.8,  # Fraction of features used per tree
+        reg_alpha=1.0,  # L1 regularization
+        reg_lambda=1.0,  # L2 regularization
+        random_state=42  # Ensures reproducibility
+    )
+    
+    # Train the model on the entire dataset
+    model.fit(X, y)
+    
+    # Get predicted probabilities
+    predicted_proba = model.predict_proba(datain.drop(columns=['WL1']))
+    # Get predicted class
+    predicted_class = model.predict(datain.drop(columns=['WL1']))
+    
+    return [predicted_class, predicted_proba]
+    # return [0, 1]
 
+
+
+
+
+# %% ANDYS MODEL
+
+def parse_tuple(val):
+    return ast.literal_eval(val)
+
+df = pd.read_csv('kills_list.csv', converters={'kills': parse_tuple})
+df = df[~df['kills'].apply(lambda x: x==(None, None))]
+print(df)
+df['kills_diff'] = df.apply(lambda row: row['kills'][0]-row['kills'][1], axis=1)
+df['WL_num'] = df['WL'].map({'W':True, 'L':False})
+
+print(df)
+
+
+
+df[['my_kills', 'opp__kills']] = pd.DataFrame(df['kills'].tolist(), index=df.index)
+means = df.groupby('TEAM_ABBREVIATION')['my_kills'].mean()
+df['kill_mean'] = df.groupby('TEAM_ABBREVIATION')['my_kills'].transform('mean')
+
+every_game = leaguegamefinder.LeagueGameFinder().get_data_frames()[0]
+every_game['GAME_ID'] = every_game['GAME_ID'].astype(np.int64)
+df = pd.merge(df, every_game, on='GAME_ID')
+df['opp'] = df['MATCHUP'].str[-3:]
+df['opp_mean'] = df['opp'].map(means)
+df['mean_diff'] = df['kill_mean'] - df['opp_mean']
+# print(df[df['mean_diff'] != 0])
+df['TS'] = df['PTS'] * .5 /(df['FGA'] + 0.474 * df['FTA'])
+print(df.columns)
+
+
+X = df[['kills_diff', 'FG3M', 'TOV', 'TS']]
+y = df['WL_num']
+
+# Split data into train and test sets
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+
+# Initialize and fit logistic regression model
+model = LogisticRegression()
+model.fit(X_train, y_train)
+
+# Make predictions
+y_pred = model.predict(X_test)
+
+# Evaluate model
+accuracy = accuracy_score(y_test, y_pred)
+print(f'Accuracy: {accuracy:.2f}')
+
+# Predict probabilities for the positive class
+y_probs = model.predict_proba(X_test)[:, 1]  # Probability of class 1
+
+
+from nba_api.stats.endpoints import teamyearbyyearstats
+team_ids = df[['TEAM_ABBREVIATION_y', 'TEAM_ID']].drop_duplicates()
+def Andypredict_game(team1, team2):
+
+    team1_id = team_ids.loc[team_ids['TEAM_ABBREVIATION_y'] == team1].iloc[0,1]
+    team1_stats = teamyearbyyearstats.TeamYearByYearStats(team1_id).get_data_frames()[0].tail(1)
+    team1_stats['TS'] = team1_stats['PTS'] * .5 / (df['FGA'] + 0.474 * df['FTA'])
+    team1_3pct =team1_stats['FG3M'].values.tolist()[0]
+    team1_tov = team1_stats['TOV'].values.tolist()[0]
+    team1_ts = team1_stats['TS'].values.tolist()[0]
+    kill_diff = means[team1] - means[team2]
+    pred = model.predict([[kill_diff, team1_3pct, team1_tov, team1_ts]])
+    proba_pred = model.predict_proba([[kill_diff, team1_3pct, team1_tov, team1_ts]])[0]
+
+    return [pred, proba_pred]
 
 
 # %% code to reorganize the team data
@@ -701,12 +799,16 @@ def randomForest(datain):
 def combineTeamsDataForModeling(team1, team2):
     # TEAM 1 IS THE ONE WE ARE PREDICTING WILL WIN OR NOT
     tempcombinedshuffled_df = pd.concat([team1, team2], axis=1)
+    
     tempcombinedshuffled_df['WL1'] = tempcombinedshuffled_df['WL1'].map({'L': 0, 'W': 1})
     tempcombinedshuffled_df['WL2'] = tempcombinedshuffled_df['WL2'].map({'L': 0, 'W': 1})
     tempcombinedshuffled_df = tempcombinedshuffled_df.drop(columns=['Game_ID1', 'Game_ID2'])
     tempcombinedshuffled_df = tempcombinedshuffled_df.dropna()
-
+    
     tempcombinedshuffled_df = tempcombinedshuffled_df.drop(columns=['WL2'])
+    
+    tempcombinedshuffled_df = tempcombinedshuffled_df.apply(pd.to_numeric, errors='coerce')
+    print(tempcombinedshuffled_df.dtypes)
     print(tempcombinedshuffled_df)
     return tempcombinedshuffled_df
 
@@ -726,7 +828,7 @@ with col1:
 
 with col2:
     team2pick = st.selectbox(
-        "Team1 pick",
+        "Team2 pick",
         ("ATL", "BOS", "BKN", "CHA", "CHI", "CLE", "DET", "IND", "MIA", "MIL", "NYK", "ORL", "PHI", "TOR", "WAS", "DAL", "DEN", "GSW", "HOU", "LAC", "LAL", "MEM", "MIN", "NOP", "OKC", "PHX", "POR", "SAC", "SAS", "UTA"),
         index=None,
         placeholder="Choose your team 2...",
@@ -738,11 +840,17 @@ with col2:
 logRegScore = "Not in Yet"
 RFScore = "Not in Yet"
 XGScore = "Not in Yet"
-
+aScore = "Not in Yet"
 
 wlval1 = ""
+wlval2 = ""
+wlval3 = ""
+wlval4 = ""
 
 output1 = ""
+output2 = ""
+output3 = ""
+output4 = ""
 
 st.write("Press to Predict if Your Team Will Win:")
 if st.button("Predict"):
@@ -752,8 +860,8 @@ if st.button("Predict"):
     teamInput = combineTeamsDataForModeling(team1, team2)
     
     
-    RFScore = randomForest(teamInput)
-    XGScore = "Not in Yet"
+   
+    
     
     
     # logistic regression
@@ -764,22 +872,50 @@ if st.button("Predict"):
         wlval1 = "L"
     output1 = f"Your team is predicted to: {wlval1}. Percentages: {logRegScore[1]}"
     
+    # Random Forrest
+    RFScore = randomForesttest(teamInput)
+    if(RFScore[0] == 1):
+        wlval2 = "W"
+    else:
+        wlval2 = "L"
+    output2 = f"Your team is predicted to: {wlval2}. Percentages: {RFScore[1]}"
+    
+    # XGboost
+    XGScore = XGBoosttest(teamInput)
+    if(XGScore[0] == 1):
+        wlval3 = "W"
+    else:
+        wlval3 = "L"
+    output3 = f"Your team is predicted to: {wlval3}. Percentages: {XGScore[1]}"
+    
+    # andy
+    aScore = Andypredict_game(team1pick, team2pick)
+    if(aScore[0] == 1):
+        wlval4 = "W"
+    else:
+        wlval4 = "L"
+    output4 = f"Your team is predicted to: {wlval4}. Percentages: {aScore[1]}"
 
-logReg, RF, XG = st.columns(3)
+logReg, RF, XG, Andy = st.columns(4)
 container1 = st.container(border=True)
 container2 = st.container(border=True)
 container3 = st.container(border=True)
+container4 = st.container(border=True)
 with logReg:
     container1.write("Logistic Regression")
     container1.write(output1)
 
 with RF:
     container2.write("Random Forest")
-    container2.write(RFScore)
+    container2.write(output2)
 
 with XG:
     container3.write("XG Boost")
-    container3.write(XGScore)
+    container3.write(output3)
+    
+with XG:
+    container4.write("Andy's model")
+    container4.write(output4)
 
 
 
