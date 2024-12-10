@@ -15,10 +15,13 @@ import collections
 from sklearn.model_selection import train_test_split
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import accuracy_score, classification_report, confusion_matrix
+from sklearn.metrics import roc_auc_score, roc_curve
 
 #%%
 from sklearn.model_selection import GridSearchCV
 from sklearn.ensemble import RandomForestClassifier
+from xgboost import XGBClassifier
+from sklearn.ensemble import StackingClassifier
 
 #%% bring in dataset
 
@@ -235,6 +238,19 @@ test_accuracy = accuracy_score(y_test, y_test_pred)
 print(f"Test Accuracy: {test_accuracy:.2f}")
 print("\nClassification Report:")
 print(classification_report(y_test, y_test_pred))
+
+# %%
+# Evaluate on the validation set using AUROC
+y_val_proba = model.predict_proba(X_val)[:, 1]  # Predicted probabilities for the positive class
+val_auroc = roc_auc_score(y_val, y_val_proba)
+
+print(f"Validation AUROC: {val_auroc:.2f}")
+
+# Evaluate on the test set using AUROC
+y_test_proba = model.predict_proba(X_test)[:, 1]  # Predicted probabilities for the positive class
+test_auroc = roc_auc_score(y_test, y_test_proba)
+
+print(f"Test AUROC: {test_auroc:.2f}")
 
 # %%
 
@@ -682,7 +698,7 @@ y = combinedshuffledtrimmed_df['WL1']
 X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
 
 # Import XGBoost classifier
-from xgboost import XGBClassifier
+
 
 # Train the XGBoost model
 model = XGBClassifier(random_state=42)
@@ -727,11 +743,41 @@ print(classification_report(y_test, y_test_pred))
 
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 # %% run and save models
 import joblib
 # logist reg
 
-X = combinedshuffled_df.drop(columns=['WL1'])
+# %%
+predictive_features = [
+    'ts_uw1', 'ast_percentage_uw1', 'ts_uw2', 'ast_percentage_uw2'
+]
+
+# Drop all other columns except the predictive features and the target
+X = combinedshuffled_df[predictive_features]
 y = combinedshuffled_df['WL1']
 # Split into training and test sets
 X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
@@ -769,20 +815,29 @@ print(f"Validation Accuracy: {val_accuracy:.2f}")
 print(f"Test Accuracy: {test_accuracy:.2f}")
 print("\nClassification Report:")
 print(classification_report(y_test, y_test_pred))
-joblib.dump(model, 'logistic_regression_model.pkl')
+
+# Evaluate on the validation set using AUROC
+y_val_proba = model.predict_proba(X_val)[:, 1]  # Predicted probabilities for the positive class
+val_auroc = roc_auc_score(y_val, y_val_proba)
+
+print(f"Validation AUROC: {val_auroc:.2f}")
+
+# Evaluate on the test set using AUROC
+y_test_proba = model.predict_proba(X_test)[:, 1]  # Predicted probabilities for the positive class
+test_auroc = roc_auc_score(y_test, y_test_proba)
+
+print(f"Test AUROC: {test_auroc:.2f}")
 
 
 
 
 # %%
-
-X = combinedshuffled_df.drop(columns=['WL1'])
-y = combinedshuffled_df['WL1']
-
 # Split into training and test sets
+X = combinedshuffledtrimmed_df.drop(columns=['WL1'])
+y = combinedshuffledtrimmed_df['WL1']
 X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
 
-# Create a Random Forest model with the specified hyperparameters
+# Create and train the Random Forest model
 model = RandomForestClassifier(
     n_estimators=300,
     max_depth=30,
@@ -791,16 +846,14 @@ model = RandomForestClassifier(
     bootstrap=True,
     random_state=42
 )
-
-# Train the model on the training set
 model.fit(X_train, y_train)
 
-# Predict and evaluate accuracy on the test set
-y_pred = model.predict(X_test)
-accuracy = accuracy_score(y_test, y_pred)
-print(f"Test Set Accuracy: {accuracy:.2f}")
+# Evaluate on the test set
+y_test_proba = model.predict_proba(X_test)[:, 1]  # Predicted probabilities for the positive class
+test_auroc = roc_auc_score(y_test, y_test_proba)
+print(f"Test Set AUROC: {test_auroc:.2f}")
 
-# Split data for validation and testing
+# Split for validation and test sets
 X_train, X_temp, y_train, y_temp = train_test_split(X, y, test_size=0.3, stratify=y, random_state=42)
 X_val, X_test, y_val, y_test = train_test_split(X_temp, y_temp, test_size=0.5, stratify=y_temp, random_state=42)
 
@@ -808,12 +861,142 @@ X_val, X_test, y_val, y_test = train_test_split(X_temp, y_temp, test_size=0.5, s
 model.fit(X_train, y_train)
 
 # Evaluate on the validation set
+y_val_proba = model.predict_proba(X_val)[:, 1]  # Predicted probabilities for the positive class
+val_auroc = roc_auc_score(y_val, y_val_proba)
+print(f"Validation Set AUROC: {val_auroc:.2f}")
+
+# Evaluate on the test set
+y_test_proba = model.predict_proba(X_test)[:, 1]  # Predicted probabilities for the positive class
+test_auroc = roc_auc_score(y_test, y_test_proba)
+print(f"Test Set AUROC (Re-trained): {test_auroc:.2f}")
+
+
+# %% Run the XGBoost again with cross-validation
+
+X = combinedshuffled_df.drop(columns=['WL1'])
+y = combinedshuffled_df['WL1']
+
+# Split into training and test sets
+X_train, X_temp, y_train, y_temp = train_test_split(X, y, test_size=0.3, stratify=y, random_state=42)
+
+# Split temporary dataset into validation (15%) and test (15%) datasets
+X_val, X_test, y_val, y_test = train_test_split(X_temp, y_temp, test_size=0.5, stratify=y_temp, random_state=42)
+
+# Create the XGBoost model with hyperparameters
+model = XGBClassifier(
+    n_estimators=200,  # Number of trees (increase for better learning)
+    learning_rate=0.05,  # Step size shrinkage
+    max_depth=6,  # Maximum depth of each tree
+    subsample=0.8,  # Fraction of samples used per tree
+    colsample_bytree=0.8,  # Fraction of features used per tree
+    reg_alpha=1.0,  # L1 regularization (penalizes the number of features)
+    reg_lambda=1.0,  # L2 regularization (penalizes large coefficients)
+    random_state=42  # Ensures reproducibility
+)
+
+# Train the model
+model.fit(X_train, y_train)
+
+# Evaluate on the validation set
 y_val_pred = model.predict(X_val)
 val_accuracy = accuracy_score(y_val, y_val_pred)
-print(f"Validation Set Accuracy: {val_accuracy:.2f}")
+print(f"Validation Accuracy: {val_accuracy:.2f}")
 
 # Evaluate on the test set
 y_test_pred = model.predict(X_test)
 test_accuracy = accuracy_score(y_test, y_test_pred)
-print(f"Test Set Accuracy: {test_accuracy:.2f}")
-joblib.dump(model, 'rf.pkl')
+print(f"Test Accuracy: {test_accuracy:.2f}")
+
+# Display classification report
+print("\nClassification Report:")
+print(classification_report(y_test, y_test_pred))
+
+# Plot feature importance
+from xgboost import plot_importance
+
+print(X.columns)
+plot_importance(model, importance_type='weight')  # You can also try 'gain' or 'cover'
+plt.show()
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+# %%
+
+# trying to stack all the modesl
+
+X = combinedshuffled_df.drop(columns=['WL1'])
+y = combinedshuffled_df['WL1']
+
+# Split the data into training and test sets
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+
+# Define base models
+base_models = [
+    ('logistic', LogisticRegression(C=3792.690190732246, max_iter=5000, random_state=42, solver='saga')),
+    ('random_forest', RandomForestClassifier(
+        n_estimators=300,
+        max_depth=30,
+        min_samples_split=10,
+        min_samples_leaf=4,
+        bootstrap=True,
+        random_state=42
+    )),
+    ('xgboost', XGBClassifier(
+        n_estimators=200,
+        learning_rate=0.05,
+        max_depth=6,
+        subsample=0.8,
+        colsample_bytree=0.8,
+        reg_alpha=1.0,
+        reg_lambda=1.0,
+        random_state=42
+    ))
+]
+
+# Meta-model (used to combine predictions)
+meta_model = RandomForestClassifier(random_state=42)
+
+# Create the StackingClassifier
+stacking_clf = StackingClassifier(
+    estimators=base_models,
+    final_estimator=meta_model,
+    cv=5,  # Cross-validation for meta-model
+    stack_method='predict_proba'  # Use predicted probabilities for stacking
+)
+
+# Train the stacking model on the training set
+stacking_clf.fit(X_train, y_train)
+
+# Predict on the test set
+y_pred = stacking_clf.predict(X_test)
+
+# Calculate accuracy
+accuracy = accuracy_score(y_test, y_pred)
+print(f"Test Accuracy: {accuracy:.2f}")
+
+
+# %%
+
+auroc = roc_auc_score(y_test, y_pred)
+print(f"Test AUROC: {auroc:.2f}")
